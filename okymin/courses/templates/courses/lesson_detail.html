@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title></title>
+    </head>
+    <body>
+        <h1>Desson Detail View</h1>
+        {% if object is not None %}
+        <h2> {{ object.title }} </h2>
+        <h2> {{ object.description }} </h2>
+        
+        {%else%}
+        <h2>Upgrade membership</h2>
+        {%endif%}
+    </body>
+</html>
