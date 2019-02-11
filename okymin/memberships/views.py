@@ -2,6 +2,7 @@ from django.shortcuts import render, redirect
 from django.views.generic import ListView
 from django.http import HttpResponseRedirect
 from django.urls import reverse
+from django.conf import settings
 from .models import Membership,UserMembership,Subsciption
 # Create your views here.
 def get_user_membership(request):
@@ -15,6 +16,13 @@ def get_user_subscription(request):
 	if user_subscription_qs.exists():
 		 user_subscription = user_subscription_qs.first()
 		 return user_subscription
+	return None
+
+def get_selected_membership(request):
+	membership_type = request.session['selected_membership_type']
+	selected_membership_qs= Membership.objects.filter(membership_type = membership_type)
+	if selected_membership_qs.exists():
+		return selected_membership_qs.first()
 	return None
 
 class MembershipSelectView(ListView):
@@ -49,4 +57,92 @@ class MembershipSelectView(ListView):
 		request.session['selected_membership_type'] = selected_membership.membership_type
 
 		return HttpResponseRedirect(reverse('memberships:payment'))
+
+def PaymentView(request):
+    user_membership = get_user_membership(request)
+    try:
+        selected_membership = get_selected_membership(request)
+    except:
+        return redirect(reverse("memberships:select"))
+    publishKey = settings.STRIPE_PUBLISHABLE_KEY
+    if request.method == "POST":
+        try:
+            token = request.POST['stripeToken']
+
+            # UPDATE FOR STRIPE API CHANGE 2018-05-21
+
+            '''
+            First we need to add the source for the customer
+            '''
+
+            customer = stripe.Customer.retrieve(user_membership.stripe_customer_id)
+            customer.source = token # 4242424242424242
+            customer.save()
+
+            '''
+            Now we can create the subscription using only the customer as we don't need to pass their
+            credit card source anymore
+            '''
+
+            subscription = stripe.Subscription.create(
+                customer=user_membership.stripe_customer_id,
+                items=[
+                    { "plan": selected_membership.stripe_plan_id },
+                ]
+            )
+
+            return redirect(reverse('memberships:update-transactions',
+                                    kwargs={
+                                        'subscription_id': subscription.id
+                                    }))
+
+        except:
+            messages.info(request, "An error has occurred, investigate it in the console")
+
+    context = {
+        'publishKey': publishKey,
+        'selected_membership': selected_membership
+    }
+
+    return render(request, "memberships/membership_payment.html", context)
+
+
+def updateTransactions(request,subscription_id):
+	user_membership = get_user_membership(request)
+	selected_membership = get_selected_membership(request)
+	user_membership.membership = selected_membership
+	user_membership.save()
+
+	sub,created = Subscription.objects.get_or_create(
+		user_membership = user_membership)
+	sub.stripe_subscription_id = subscription_id
+	sub.active = True
+	sub.save() 
+
+	try:
+		del request.session['selected_membership_type']
+	except:
+		pass
+
+	messages.info(request,'Successfully created {} membership'.format(selected_membership))
+
+	return redirect(reverse('membership:select'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
