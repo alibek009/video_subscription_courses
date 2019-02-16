@@ -3,8 +3,22 @@ from django.views.generic import ListView
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.conf import settings
-from .models import Membership,UserMembership,Subsciption
+from django.contrib import messages
+from .models import Membership,UserMembership,Subscription
 # Create your views here.
+
+
+import stripe
+
+def profile_view(request):
+    user_membership = get_user_membership(request)
+    user_subscription = get_user_subscription(request)
+    context = {
+        'user_membership': user_membership,
+        'user_subscription': user_subscription
+    }
+    return render(request, "memberships/profile.html", context)
+
 def get_user_membership(request):
 	user_membership_qs = UserMembership.objects.filter(user = request.user)
 	if user_membership_qs.exists():
@@ -12,7 +26,7 @@ def get_user_membership(request):
 	return None
 
 def get_user_subscription(request):
-	user_subscription_qs = Subsciption.objects.filter(user_membership = get_user_membership(request))
+	user_subscription_qs = Subscription.objects.filter(user_membership = get_user_membership(request))
 	if user_subscription_qs.exists():
 		 user_subscription = user_subscription_qs.first()
 		 return user_subscription
@@ -59,45 +73,33 @@ class MembershipSelectView(ListView):
 		return HttpResponseRedirect(reverse('memberships:payment'))
 
 def PaymentView(request):
+
     user_membership = get_user_membership(request)
+
     try:
         selected_membership = get_selected_membership(request)
     except:
         return redirect(reverse("memberships:select"))
+
     publishKey = settings.STRIPE_PUBLISHABLE_KEY
-    if request.method == "POST":
+
+    if request.method == 'POST':
         try:
             token = request.POST['stripeToken']
-
-            # UPDATE FOR STRIPE API CHANGE 2018-05-21
-
-            '''
-            First we need to add the source for the customer
-            '''
-
-            customer = stripe.Customer.retrieve(user_membership.stripe_customer_id)
-            customer.source = token # 4242424242424242
-            customer.save()
-
-            '''
-            Now we can create the subscription using only the customer as we don't need to pass their
-            credit card source anymore
-            '''
-
+            cus = stripe.Customer.retrieve(user_membership.stripe_customer_id)
+            cus.source = token
+            cus.save()
             subscription = stripe.Subscription.create(
                 customer=user_membership.stripe_customer_id,
-                items=[
-                    { "plan": selected_membership.stripe_plan_id },
-                ]
+                items=[{
+                    'plan': selected_membership.stripe_plan_id
+                }]
             )
-
-            return redirect(reverse('memberships:update-transactions',
-                                    kwargs={
-                                        'subscription_id': subscription.id
-                                    }))
-
-        except:
-            messages.info(request, "An error has occurred, investigate it in the console")
+            return redirect(reverse('memberships:update-transactions', kwargs={
+                'subscription_id': subscription.id
+            }))
+        except stripe.error.CardError:
+            messages.info(request, 'Your card has been declined')
 
     context = {
         'publishKey': publishKey,
@@ -107,26 +109,52 @@ def PaymentView(request):
     return render(request, "memberships/membership_payment.html", context)
 
 
-def updateTransactions(request,subscription_id):
-	user_membership = get_user_membership(request)
-	selected_membership = get_selected_membership(request)
-	user_membership.membership = selected_membership
-	user_membership.save()
+def updateTransactionRecords(request, subscription_id):
+    user_membership = get_user_membership(request)
+    selected_membership = get_selected_membership(request)
 
-	sub,created = Subscription.objects.get_or_create(
-		user_membership = user_membership)
-	sub.stripe_subscription_id = subscription_id
-	sub.active = True
-	sub.save() 
+    user_membership.membership = selected_membership
+    user_membership.save()
 
-	try:
-		del request.session['selected_membership_type']
-	except:
-		pass
+    sub, created = Subscription.objects.get_or_create(
+        user_membership=user_membership)
+    sub.stripe_subscription_id = subscription_id
+    sub.active = True
+    sub.save()
 
-	messages.info(request,'Successfully created {} membership'.format(selected_membership))
+    try:
+        del request.session['selected_membership_type']
+    except:
+        pass
 
-	return redirect(reverse('membership:select'))
+    messages.info(request, 'Successfully created {} membership'.format(
+        selected_membership))
+    return redirect('/memberships')
+
+
+
+def cancelSubscription(request):
+    user_sub = get_user_subscription(request)
+
+    if user_sub.active is False:
+        messages.info(request, "You dont have an active membership")
+        return HttpResponseRedirect(request.META.get('HTTP_REFERER'))
+
+    sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
+    sub.delete()
+
+    user_sub.active = False
+    user_sub.save()
+
+    free_membership = Membership.objects.filter(membership_type='Free').first()
+    user_membership = get_user_membership(request)
+    user_membership.membership = free_membership
+    user_membership.save()
+
+    messages.info(request, "Successfully cancelled membership. We have sent an email")
+    # sending an email here
+
+    return redirect('/memberships')
 
 
 

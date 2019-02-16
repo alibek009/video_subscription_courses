@@ -7,12 +7,12 @@
 
 </head>
 <body>
-	{% include 'courses/message.html'%}
+	{% include 'courses/messages.html'%}
 	
 	<div class="container">
 		<ol class='breadcrumb'>
 	        <li><a href='/courses/'>Home</a></li>
-	        <li><a href='/profile'>Profile</a></li>
+	        <li><a href='{% url 'memberships:profile' %}'>Profile</a></li>
 	        
 	        {% block post_detail_link %}
 	        {% endblock %}
